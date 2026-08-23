@@ -116,6 +116,32 @@ from .services.task_queue import create_background_task, init_queue
 from .routes import register_routers
 
 
+def _configure_cpu_thread_limits() -> None:
+    """Cap CPU thread usage for inference when explicit limits are provided."""
+    num_threads_raw = os.environ.get("VOICEBOX_TORCH_NUM_THREADS")
+    if num_threads_raw:
+        try:
+            num_threads = max(1, int(num_threads_raw))
+            torch.set_num_threads(num_threads)
+            logger.info("PyTorch CPU threads capped at %s", num_threads)
+        except ValueError:
+            logger.warning("Ignoring invalid VOICEBOX_TORCH_NUM_THREADS=%r", num_threads_raw)
+
+    interop_threads_raw = os.environ.get("VOICEBOX_TORCH_INTEROP_THREADS")
+    if interop_threads_raw:
+        try:
+            interop_threads = max(1, int(interop_threads_raw))
+            torch.set_num_interop_threads(interop_threads)
+            logger.info("PyTorch interop threads capped at %s", interop_threads)
+        except RuntimeError:
+            logger.warning("PyTorch interop thread cap could not be changed at runtime")
+        except ValueError:
+            logger.warning("Ignoring invalid VOICEBOX_TORCH_INTEROP_THREADS=%r", interop_threads_raw)
+
+
+_configure_cpu_thread_limits()
+
+
 def safe_content_disposition(disposition_type: str, filename: str) -> str:
     """Build a Content-Disposition header safe for non-ASCII filenames.
 

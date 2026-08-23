@@ -1,9 +1,8 @@
-# Version control
 .git
 .github
 .gitignore
 
-# Desktop-only (not needed in web container)
+# Desktop-only (not needed in the server container)
 tauri/
 landing/
 docs/
@@ -11,21 +10,27 @@ mlx-test/
 scripts/*
 !scripts/rocm-entrypoint.sh
 
-# Dependencies & build artifacts (rebuilt in Docker)
+# Dependencies and build artifacts
 node_modules/
 __pycache__/
+.venv/
+.pytest_cache/
 *.pyc
 *.pyo
+*.pyd
 *.egg-info/
 dist/
 build/
+output/
 *.spec
+web/dist/
+backend/.pytest_cache/
 
-# Data (will be bind-mounted)
+# Data is bind-mounted at runtime
 data/
 backend/data/
 
-# IDE & OS
+# IDE and OS files
 .vscode/
 .idea/
 *.swp
@@ -33,7 +38,7 @@ backend/data/
 .DS_Store
 Thumbs.db
 
-# Config files not needed in container
+# Files not required by the root Docker build
 biome.json
 .biomeignore
 .bumpversion.cfg
