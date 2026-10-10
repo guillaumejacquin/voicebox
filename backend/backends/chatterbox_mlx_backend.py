@@ -14,6 +14,7 @@ This mirrors the split the qwen engine already makes between ``mlx_backend`` and
 """
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 from typing import ClassVar
@@ -38,6 +39,21 @@ S3_TOKENIZER_HF_REPO = CHATTERBOX_MLX_S3_TOKENIZER_REPO
 # Files that must be present for the MLX multilingual model
 _MLX_WEIGHT_FILES = ["model.safetensors", "config.json", "tokenizer.json"]
 _S3_TOKENIZER_FILES = ["model.safetensors", "config.json"]
+
+
+def _delivery_settings(instruct: str | None) -> dict[str, float]:
+    settings = dict(ChatterboxMLXTTSBackend._DEFAULTS)
+    if not instruct or not instruct.startswith("audiobook:"):
+        return settings
+    delivery = json.loads(instruct[len("audiobook:"):])
+    for name in ("exaggeration", "cfg_weight"):
+        if name not in delivery:
+            continue
+        value = float(delivery[name])
+        if not 0.0 <= value <= 1.0:
+            raise ValueError(f"Invalid audiobook {name}")
+        settings[name] = value
+    return settings
 
 
 class ChatterboxMLXTTSBackend:
@@ -152,7 +168,7 @@ class ChatterboxMLXTTSBackend:
             voice_prompt: Dict with ref_audio path
             language: BCP-47 language code
             seed: Random seed for reproducibility
-            instruct: Unused (protocol compatibility)
+            instruct: Optional ``audiobook:`` JSON delivery controls
 
         Returns:
             Tuple of (audio_array, sample_rate)
@@ -185,7 +201,7 @@ class ChatterboxMLXTTSBackend:
                     ref_audio=ref_audio,
                     lang_code=language,
                     verbose=False,
-                    **self._DEFAULTS,
+                    **_delivery_settings(instruct),
                 )
             ]
             audio = np.concatenate(chunks).astype(np.float32) if chunks else np.zeros(0, dtype=np.float32)
