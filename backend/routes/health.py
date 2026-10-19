@@ -1,6 +1,7 @@
 """Health and infrastructure endpoints."""
 
 import asyncio
+import importlib.metadata
 import os
 import signal
 from pathlib import Path
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 from .. import config, models
 from ..services import tts
 from ..database import get_db
-from ..utils.platform_detect import get_backend_type, is_amd_gpu_windows
+from ..utils.platform_detect import get_backend_type, is_amd_rocm_capable
 
 router = APIRouter()
 
@@ -176,6 +177,15 @@ async def health():
     elif has_xpu:
         default_variant = "xpu"
 
+    from .. import __version__
+
+    runtime_versions = {}
+    for package_name in ("qwen-tts", "chatterbox-tts", "mlx-audio", "torch"):
+        try:
+            runtime_versions[package_name] = importlib.metadata.version(package_name)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+
     return models.HealthResponse(
         status="healthy",
         model_loaded=model_loaded,
@@ -186,8 +196,11 @@ async def health():
         vram_used_mb=vram_used,
         backend_type=backend_type,
         backend_variant=os.environ.get("VOICEBOX_BACKEND_VARIANT", default_variant),
-        supports_rocm=is_amd_gpu_windows(),
+        supports_rocm=is_amd_rocm_capable(),
         gpu_compatibility_warning=gpu_compat_warning,
+        cloud_enabled=config.is_cloud_enabled(),
+        voicebox_version=__version__,
+        runtime_versions=runtime_versions,
     )
 
 

@@ -1,0 +1,13 @@
+venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+server.log
+tests
+pyi_hooks
+voicebox-server.spec
+build_binary.py
+STYLE_GUIDE.md
+README.md

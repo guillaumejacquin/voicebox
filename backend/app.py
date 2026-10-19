@@ -49,7 +49,7 @@ if not os.environ.get("HSA_OVERRIDE_GFX_VERSION"):
 # Only set HSA_OVERRIDE_GFX_VERSION for older GPUs that need it.
 # RDNA 3+ (gfx1100+) and RDNA 4 (gfx1200+) are natively supported by ROCm
 # and the override can cause suboptimal performance or errors.
-if not os.environ.get("HSA_OVERRIDE_GFX_VERSION"):
+if not os.environ.get("HSA_OVERRIDE_GFX_VERSION") and Path("/dev/kfd").exists():
     try:
         result = subprocess.run(
             ["rocminfo"],
@@ -105,26 +105,42 @@ if not os.environ.get("MIOPEN_LOG_LEVEL"):
 import torch
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from urllib.parse import quote
 
 from . import __version__, config, database
 from .services import tts, transcribe, llm
 from .database import get_db
 from .utils.platform_detect import get_backend_type
 from .utils.progress import get_progress_manager
+# Re-exported for backwards compatibility with callers importing it from here.
+from .utils.http import safe_content_disposition as safe_content_disposition
 from .services.task_queue import create_background_task, init_queue
 from .routes import register_routers
 
 
-def safe_content_disposition(disposition_type: str, filename: str) -> str:
-    """Build a Content-Disposition header safe for non-ASCII filenames.
+def _configure_cpu_thread_limits() -> None:
+    """Cap CPU thread usage for inference when explicit limits are provided."""
+    num_threads_raw = os.environ.get("VOICEBOX_TORCH_NUM_THREADS")
+    if num_threads_raw:
+        try:
+            num_threads = max(1, int(num_threads_raw))
+            torch.set_num_threads(num_threads)
+            logger.info("PyTorch CPU threads capped at %s", num_threads)
+        except ValueError:
+            logger.warning("Ignoring invalid VOICEBOX_TORCH_NUM_THREADS=%r", num_threads_raw)
 
-    Uses RFC 5987 ``filename*`` parameter so browsers can decode UTF-8
-    filenames while the ``filename`` fallback stays ASCII-only.
-    """
-    ascii_name = "".join(c for c in filename if c.isascii() and (c.isalnum() or c in " -_.")).strip() or "download"
-    utf8_name = quote(filename, safe="")
-    return f"{disposition_type}; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
+    interop_threads_raw = os.environ.get("VOICEBOX_TORCH_INTEROP_THREADS")
+    if interop_threads_raw:
+        try:
+            interop_threads = max(1, int(interop_threads_raw))
+            torch.set_num_interop_threads(interop_threads)
+            logger.info("PyTorch interop threads capped at %s", interop_threads)
+        except RuntimeError:
+            logger.warning("PyTorch interop thread cap could not be changed at runtime")
+        except ValueError:
+            logger.warning("Ignoring invalid VOICEBOX_TORCH_INTEROP_THREADS=%r", interop_threads_raw)
+
+
+_configure_cpu_thread_limits()
 
 
 def create_app() -> FastAPI:
@@ -319,6 +335,20 @@ async def _run_startup(application: FastAPI) -> None:
     except Exception as e:
         db.rollback()
         logger.warning("Could not clean up stale generations: %s", e)
+    finally:
+        db.close()
+
+    # Seed the LLM backend dispatch from the persisted capture settings so
+    # the very first refinement / personality call after startup honours a
+    # user-configured custom OpenAI-compatible endpoint without needing a
+    # settings-write to flip the module state first.
+    db = next(get_db())
+    try:
+        from .services.settings import bootstrap_llm_backend_config
+
+        bootstrap_llm_backend_config(db)
+    except Exception as e:
+        logger.warning("Could not bootstrap custom LLM config: %s", e)
     finally:
         db.close()
 

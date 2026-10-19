@@ -7,6 +7,7 @@ on macOS due to known MPS tensor issues.
 """
 
 import asyncio
+import json
 import logging
 import threading
 from pathlib import Path
@@ -29,11 +30,17 @@ logger = logging.getLogger(__name__)
 
 CHATTERBOX_HF_REPO = "ResembleAI/chatterbox"
 
-# Files that must be present for the multilingual model
+# The files ChatterboxMultilingualTTS.from_pretrained() downloads, as of
+# chatterbox-tts 0.1.7 (mtl_tts.py allow_patterns). The load runs with HF
+# offline mode forced when this reports cached, so a partial snapshot must not
+# count as cached -- if upstream adds a file to that list, add it here too.
 _MTL_WEIGHT_FILES = [
     "t3_mtl23ls_v2.safetensors",
     "s3gen.pt",
     "ve.pt",
+    "grapheme_mtl_merged_expanded_v1.json",
+    "conds.pt",
+    "Cangjie5_TC.json",
 ]
 
 
@@ -193,7 +200,17 @@ class ChatterboxTTSBackend:
             ref_audio = None
 
         # Merge language-specific defaults with global defaults
-        lang_defaults = self._LANG_DEFAULTS.get(language, self._GLOBAL_DEFAULTS)
+        lang_defaults = dict(self._LANG_DEFAULTS.get(language, self._GLOBAL_DEFAULTS))
+        # Audiobook delivery metadata is separate from spoken text. Never pass
+        # arbitrary instructions as speech, and bound the supported controls.
+        if instruct and instruct.startswith("audiobook:"):
+            delivery = json.loads(instruct[len("audiobook:"):])
+            for name, minimum, maximum in (("exaggeration", 0.0, 1.0), ("cfg_weight", 0.0, 1.0)):
+                if name in delivery:
+                    value = float(delivery[name])
+                    if not minimum <= value <= maximum:
+                        raise ValueError(f"Invalid audiobook {name}")
+                    lang_defaults[name] = value
 
         def _generate_sync():
             import torch
@@ -203,21 +220,22 @@ class ChatterboxTTSBackend:
 
             logger.info(f"[Chatterbox] Generating: lang={language}")
 
-            wav = self.model.generate(
-                text,
-                language_id=language,
-                audio_prompt_path=ref_audio,
-                exaggeration=lang_defaults["exaggeration"],
-                cfg_weight=lang_defaults["cfg_weight"],
-                temperature=lang_defaults["temperature"],
-                repetition_penalty=lang_defaults["repetition_penalty"],
-            )
+            with torch.inference_mode():
+                wav = self.model.generate(
+                    text,
+                    language_id=language,
+                    audio_prompt_path=ref_audio,
+                    exaggeration=lang_defaults["exaggeration"],
+                    cfg_weight=lang_defaults["cfg_weight"],
+                    temperature=lang_defaults["temperature"],
+                    repetition_penalty=lang_defaults["repetition_penalty"],
+                )
 
-            # Convert tensor -> numpy
-            if isinstance(wav, torch.Tensor):
-                audio = wav.squeeze().cpu().numpy().astype(np.float32)
-            else:
-                audio = np.asarray(wav, dtype=np.float32)
+                # Convert tensor -> numpy
+                if isinstance(wav, torch.Tensor):
+                    audio = wav.squeeze().cpu().numpy().astype(np.float32)
+                else:
+                    audio = np.asarray(wav, dtype=np.float32)
 
             sample_rate = getattr(self.model, "sr", None) or getattr(self.model, "sample_rate", 24000)
 

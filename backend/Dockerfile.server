@@ -1,0 +1,39 @@
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NUMBA_CACHE_DIR=/tmp/numba_cache
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --no-deps chatterbox-tts
+RUN pip install --no-cache-dir --no-deps hume-tada
+RUN pip install --no-cache-dir git+https://github.com/QwenLM/Qwen3-TTS.git
+
+COPY . /app/backend/
+
+RUN groupadd -r voicebox && \
+    useradd -r -g voicebox -m -s /bin/bash voicebox && \
+    mkdir -p /app/data && \
+    chown -R voicebox:voicebox /app
+
+USER voicebox
+
+EXPOSE 17493
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -f http://localhost:17493/health || exit 1
+
+CMD ["python", "-m", "backend.main", "--host", "0.0.0.0", "--port", "17493", "--data-dir", "/app/data"]
